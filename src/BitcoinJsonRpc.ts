@@ -520,4 +520,15 @@ export default class BitcoinJsonRpc {
       return false;
     }
   }
+
+  // https://bitcoin-rpc.github.io/en/doc/0.17.99/rpc/wallet/createwallet/
+  public async createWallet(walletName: string, disablePrivateKeys: boolean = false) {
+    const args: any[] = [walletName];
+
+    if (disablePrivateKeys !== undefined) {
+      args.push(disablePrivateKeys);
+    }
+
+    return this.cmdWithRetryAndDecode(decoders.CreateWalletDecoder, 'createwallet', null, ...args);
+  }
 }

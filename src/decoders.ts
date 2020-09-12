@@ -292,3 +292,10 @@ export const ListUnspentDecoder = t.array(
 export type ListUnspentResult = t.TypeOf<typeof ListUnspentDecoder>;
 
 export const DumpPrivateKeyDecoder = t.string;
+
+export const CreateWalletDecoder = t.type({
+  name: t.string,
+  warning: t.union([t.string, t.undefined]),
+});
+
+export type CreateWalletResult = t.TypeOf<typeof CreateWalletDecoder>;
