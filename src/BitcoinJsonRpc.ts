@@ -8,6 +8,12 @@ import * as decoders from './decoders';
 import * as t from 'io-ts';
 import urlJoin from 'url-join';
 
+type SendToAddressArgs = { walletName?: string, address: string; amount: string; comment?: string; commentTo?: string; subtractFeeFromAmount?: boolean, replaceable?: boolean };
+type SignRawTransactionWithWalletArgs = { walletName?: string, hex: string };
+type LockUnspentArgs = { walletName?: string; unlock: boolean, transactions: { txid: string; vout: number }[] };
+type GetTransactionArgs = { walletName?: string; txhash: string };
+type ListUnspentArgs =  { walletName?: string; minConf?: number };
+
 const MAX_ATTEMPTS = 5;
 const DELAY_BETWEEN_ATTEMPTS = 5000;
 
@@ -110,37 +116,64 @@ export default class BitcoinJsonRpc {
   }
 
   // https://bitcoin-rpc.github.io/en/doc/0.17.99/rpc/wallet/sendtoaddress/
-  public async sendToAddress(address: string, amount: string, comment?: string, commentTo?: string, subtractFeeFromAmount?: boolean, replaceable?: boolean) {
-    const params: any[] = [address, amount];
+  public async sendToAddress(address: string, amount: string, comment?: string, commentTo?: string, subtractFeeFromAmount?: boolean, replaceable?: boolean): Promise<decoders.SendToAddressResult>;
+  public async sendToAddress(args: SendToAddressArgs): Promise<decoders.SendToAddressResult>;
+  public async sendToAddress(addressOrArgs: string | SendToAddressArgs, amount?: string, comment?: string, commentTo?: string, subtractFeeFromAmount?: boolean, replaceable?: boolean) {
+    const args: SendToAddressArgs = typeof addressOrArgs === 'string' ? {
+      address: addressOrArgs,
+      amount: String(amount),
+      comment,
+      commentTo,
+      subtractFeeFromAmount,
+      replaceable,
+    } : addressOrArgs;
 
-    if (replaceable !== undefined) {
-      // Argument #6
-      params.push(comment ?? '', commentTo ?? '', subtractFeeFromAmount ?? false, replaceable);
-    } else if (subtractFeeFromAmount !== undefined) {
-      // Argument #5
-      params.push(comment ?? '', commentTo ?? '', subtractFeeFromAmount);
-    } else if (commentTo !== undefined) {
-      // Argument #4
-      params.push(comment ?? '', commentTo);
-    } else if (commentTo) {
-      // Argument #3 
-      params.push(comment);
-    }
+    const params: any[] = [args.address, args.amount];
+    params.push(args.comment ?? '');
+    params.push(args.commentTo ?? '');
+    params.push(args.subtractFeeFromAmount ?? '');
+    params.push(args.replaceable ?? '');
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
 
-    return this.cmdWithRetryAndDecode(decoders.SendToAddressResultDecoder, 'sendtoaddress', null, ...params);
+    return this.cmdWithRetryAndDecode(decoders.SendToAddressResultDecoder, 'sendtoaddress', path, ...params);
   }
 
-  public async signRawTransactionWithWallet(hex: string) {
+  public async signRawTransactionWithWallet(hex: string): Promise<decoders.SignRawTransactionWithWalletResult>;
+  public async signRawTransactionWithWallet(args: SignRawTransactionWithWalletArgs): Promise<decoders.SignRawTransactionWithWalletResult>;
+  public async signRawTransactionWithWallet(hexOrArgs: string | SignRawTransactionWithWalletArgs) {
+    const args: SignRawTransactionWithWalletArgs = typeof hexOrArgs === 'string' ? {
+      hex: hexOrArgs,
+    } : hexOrArgs;
+
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
     return this.cmdWithRetryAndDecode(
       decoders.SignRawTransactionWithWalletResultDecoder,
       'signrawtransactionwithwallet',
-      null,
-      hex
+      path,
+      args.hex
     );
   }
 
-  public async lockUnspent(unlock: boolean, transactions: { txid: string; vout: number }[]) {
-    return this.cmdWithRetryAndDecode(decoders.LockUnspentResultDecoder, 'lockunspent', null, unlock, transactions);
+  public async lockUnspent(unlock: boolean, transactions: { txid: string; vout: number }[]): Promise<decoders.LockUnspentResult>;
+  public async lockUnspent(args: LockUnspentArgs): Promise<decoders.LockUnspentResult>;
+  public async lockUnspent(unlockOrArgs: boolean | LockUnspentArgs, transactions?: { txid: string; vout: number }[]) {
+    let args: LockUnspentArgs;
+    if (typeof unlockOrArgs === 'boolean') {
+      if (!transactions) {
+        throw new Error('Must specify transactions');
+      }
+      args = {
+        unlock: unlockOrArgs,
+        transactions,
+      };
+    } else {
+      args = unlockOrArgs;
+    }
+
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
+    return this.cmdWithRetryAndDecode(decoders.LockUnspentResultDecoder, 'lockunspent', path, args.unlock, args.transactions);
   }
 
   // Arguments:
@@ -224,6 +257,7 @@ export default class BitcoinJsonRpc {
   public async fundRawTransaction(
     hex: string,
     options: {
+      walletName?: string,
       changeAddress?: string,
       changePosition?: number,
       change_type?: string,
@@ -238,8 +272,10 @@ export default class BitcoinJsonRpc {
     iswitness?: boolean
   ) {
     //@todo impl with iswitness option
+    const path = options.walletName ? `/wallet/${options.walletName}` : null;
+
     return this.cmdWithRetryAndDecode(
-      decoders.FundRawTransactionResultDecoder, 'fundrawtransaction', null, hex, options
+      decoders.FundRawTransactionResultDecoder, 'fundrawtransaction', path, hex, options
     );
   }
 
@@ -286,8 +322,16 @@ export default class BitcoinJsonRpc {
     );
   }
 
-  public async getTransaction(txhash: string) {
-    return this.cmdWithRetryAndDecode(decoders.GetTransactionResultDecoder, 'gettransaction', null, txhash);
+  public async getTransaction(txhash: string): Promise<decoders.GetTransactionResult>;
+  public async getTransaction(args: GetTransactionArgs): Promise<decoders.GetTransactionResult>;
+  public async getTransaction(txhashOrArgs: string | GetTransactionArgs) {
+    const args = typeof txhashOrArgs === 'string' ? {
+      txhash: txhashOrArgs,
+    } : txhashOrArgs;
+
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
+    return this.cmdWithRetryAndDecode(decoders.GetTransactionResultDecoder, 'gettransaction', path, args.txhash);
   }
 
   public async liquidGetTransaction(txhash: string) {
@@ -326,12 +370,14 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(decoders.LiquidValidateAddressResultDecoder, 'validateaddress', null, address);
   }
 
-  public async getNewAddress() {
-    return this.cmdWithRetryAndDecode(decoders.GetNewAddressResultDecoder, 'getnewaddress', null);
+  public async getNewAddress(args: { walletName?: string }) {
+    const path = args && args.walletName ? `/wallet/${args.walletName}` : null;
+    return this.cmdWithRetryAndDecode(decoders.GetNewAddressResultDecoder, 'getnewaddress', path);
   }
 
-  public async getBalance() {
-    return this.cmdWithRetryAndDecode(decoders.GetBalanceResultDecoder, 'getbalance', null);
+  public async getBalance(args: { walletName?: string }) {
+    const path = args && args.walletName ? `/wallet/${args.walletName}` : null;
+    return this.cmdWithRetryAndDecode(decoders.GetBalanceResultDecoder, 'getbalance', path);
   }
 
   public async generateToAddress(nblocks: number, address:string) {
@@ -497,10 +543,17 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(decoders.ZcashListUnspentDecoder, 'z_listunspent', null, ...args);
   }
 
-  public async listUnspent(minConf?: number) {
-    const args: any[] = minConf === undefined ? [] : [minConf];
+  public async listUnspent(minConf?: number): Promise<decoders.ListUnspentResult>;
+  public async listUnspent(args: ListUnspentArgs): Promise<decoders.ListUnspentResult>;
+  public async listUnspent(minConfOrArgs?: number | ListUnspentArgs) {
+    const args = typeof minConfOrArgs === 'undefined' || typeof minConfOrArgs === 'number' ? {
+      minConf: minConfOrArgs,
+    } : minConfOrArgs;
 
-    return this.cmdWithRetryAndDecode(decoders.ListUnspentDecoder, 'listunspent', null, ...args);
+    const params: any[] = args.minConf === undefined ? [] : [args.minConf];
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
+    return this.cmdWithRetryAndDecode(decoders.ListUnspentDecoder, 'listunspent', path, ...params);
   }
 
   public async dumpPrivateKey(address: string) {
