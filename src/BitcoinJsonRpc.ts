@@ -6,6 +6,7 @@ import { PURE_METHODS, getWasExecutedFromError, getShouldRetry, iotsDecode } fro
 import { BitcoinJsonRpcError } from './BitcoinJsonRpcError';
 import * as decoders from './decoders';
 import * as t from 'io-ts';
+import urlJoin from 'url-join';
 
 const MAX_ATTEMPTS = 5;
 const DELAY_BETWEEN_ATTEMPTS = 5000;
@@ -18,11 +19,16 @@ export default class BitcoinJsonRpc {
     this.options = options;
   }
 
-  private cmd(method: string, ...params: any[]): Promise<any> {
-    return jsonRpcCmd(this.url, method, params);
+  private cmdWithPath(method: string, path: string, ...params: any[]) {
+    return jsonRpcCmd(urlJoin(this.url, path), method, params);
   }
 
-  private cmdWithRetry(method: string, ...params: any[]): Promise<any> {
+  private cmd(method: string, path: string | null, ...params: any[]): Promise<any> {
+    const url = path === null ? this.url : urlJoin(this.url, path);
+    return jsonRpcCmd(url, method, params);
+  }
+
+  private cmdWithRetry(method: string, path: string | null, ...params: any[]): Promise<any> {
     const methodIsPure = PURE_METHODS.includes(method);
     const maxAttempts = MAX_ATTEMPTS;
 
@@ -38,7 +44,7 @@ export default class BitcoinJsonRpc {
       });
 
       try {
-        const result = await this.cmd(method, ...params);
+        const result = await this.cmd(method, path, ...params);
         return result;
       } catch (error) {
         const executed = getWasExecutedFromError(method, error);
@@ -85,9 +91,10 @@ export default class BitcoinJsonRpc {
   private async cmdWithRetryAndDecode<A, I = unknown>(
     decoder: t.Decoder<I, A>,
     method: string,
+    path: string | null,
     ...params: any[]
   ): Promise<A> {
-    const result = await this.cmdWithRetry(method, ...params);
+    const result = await this.cmdWithRetry(method, path, ...params);
 
     try {
       const decoded = iotsDecode(decoder, result);
@@ -120,19 +127,20 @@ export default class BitcoinJsonRpc {
       params.push(comment);
     }
 
-    return this.cmdWithRetryAndDecode(decoders.SendToAddressResultDecoder, 'sendtoaddress', ...params);
+    return this.cmdWithRetryAndDecode(decoders.SendToAddressResultDecoder, 'sendtoaddress', null, ...params);
   }
 
   public async signRawTransactionWithWallet(hex: string) {
     return this.cmdWithRetryAndDecode(
       decoders.SignRawTransactionWithWalletResultDecoder,
       'signrawtransactionwithwallet',
+      null,
       hex
     );
   }
 
   public async lockUnspent(unlock: boolean, transactions: { txid: string; vout: number }[]) {
-    return this.cmdWithRetryAndDecode(decoders.LockUnspentResultDecoder, 'lockunspent', unlock, transactions);
+    return this.cmdWithRetryAndDecode(decoders.LockUnspentResultDecoder, 'lockunspent', null, unlock, transactions);
   }
 
   // Arguments:
@@ -167,6 +175,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.CreateRawTransactionResultDecoder,
       'createrawtransaction',
+      null,
       inputs,
       outputs,
       lockTime
@@ -230,7 +239,7 @@ export default class BitcoinJsonRpc {
   ) {
     //@todo impl with iswitness option
     return this.cmdWithRetryAndDecode(
-      decoders.FundRawTransactionResultDecoder, 'fundrawtransaction', hex, options
+      decoders.FundRawTransactionResultDecoder, 'fundrawtransaction', null, hex, options
     );
   }
 
@@ -278,55 +287,55 @@ export default class BitcoinJsonRpc {
   }
 
   public async getTransaction(txhash: string) {
-    return this.cmdWithRetryAndDecode(decoders.GetTransactionResultDecoder, 'gettransaction', txhash);
+    return this.cmdWithRetryAndDecode(decoders.GetTransactionResultDecoder, 'gettransaction', null, txhash);
   }
 
   public async liquidGetTransaction(txhash: string) {
-    return this.cmdWithRetryAndDecode(decoders.LiquidGetTransactionResultDecoder, 'gettransaction', txhash);
+    return this.cmdWithRetryAndDecode(decoders.LiquidGetTransactionResultDecoder, 'gettransaction', null, txhash);
   }
 
   public async getInfo() {
-    return this.cmdWithRetryAndDecode(decoders.GetInfoResultDecoder, 'getinfo');
+    return this.cmdWithRetryAndDecode(decoders.GetInfoResultDecoder, 'getinfo', null);
   }
 
   public async getBlockchainInfo() {
-    return this.cmdWithRetryAndDecode(decoders.GetBlockchainInfoResultDecoder, 'getblockchaininfo');
+    return this.cmdWithRetryAndDecode(decoders.GetBlockchainInfoResultDecoder, 'getblockchaininfo', null);
   }
 
   public async getRawTransactionAsObject(txhash: string) {
-    return this.cmdWithRetryAndDecode(decoders.GetRawTransactionAsObjectResultDecoder, 'getrawtransaction', txhash, 1);
+    return this.cmdWithRetryAndDecode(decoders.GetRawTransactionAsObjectResultDecoder, 'getrawtransaction', null, txhash, 1);
   }
 
   public async getBlockHashFromHeight(height: number) {
-    return this.cmdWithRetryAndDecode(decoders.GetBlockHashFromHeightResultDecoder, 'getblockhash', height);
+    return this.cmdWithRetryAndDecode(decoders.GetBlockHashFromHeightResultDecoder, 'getblockhash', null, height);
   }
 
   public async getBlockFromHash(blockHash: string) {
-    return this.cmdWithRetryAndDecode(decoders.GetBlockFromHashResultDecoder, 'getblock', blockHash);
+    return this.cmdWithRetryAndDecode(decoders.GetBlockFromHashResultDecoder, 'getblock', null, blockHash);
   }
 
   public async getRawMempool() {
-    return this.cmdWithRetryAndDecode(decoders.GetRawMempoolResultDecoder, 'getrawmempool');
+    return this.cmdWithRetryAndDecode(decoders.GetRawMempoolResultDecoder, 'getrawmempool', null);
   }
 
   public async validateAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.ValidateAddressResultDecoder, 'validateaddress', address);
+    return this.cmdWithRetryAndDecode(decoders.ValidateAddressResultDecoder, 'validateaddress', null, address);
   }
 
   public async liquidValidateAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.LiquidValidateAddressResultDecoder, 'validateaddress', address);
+    return this.cmdWithRetryAndDecode(decoders.LiquidValidateAddressResultDecoder, 'validateaddress', null, address);
   }
 
   public async getNewAddress() {
-    return this.cmdWithRetryAndDecode(decoders.GetNewAddressResultDecoder, 'getnewaddress');
+    return this.cmdWithRetryAndDecode(decoders.GetNewAddressResultDecoder, 'getnewaddress', null);
   }
 
   public async getBalance() {
-    return this.cmdWithRetryAndDecode(decoders.GetBalanceResultDecoder, 'getbalance');
+    return this.cmdWithRetryAndDecode(decoders.GetBalanceResultDecoder, 'getbalance', null);
   }
 
   public async generateToAddress(nblocks: number, address:string) {
-    return this.cmdWithRetryAndDecode(decoders.GenerateToAddressResultDecoder, 'generatetoaddress', nblocks, address);
+    return this.cmdWithRetryAndDecode(decoders.GenerateToAddressResultDecoder, 'generatetoaddress', null, nblocks, address);
   }
 
   public async getLiquidBalanceForAsset(
@@ -337,6 +346,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.GetLiquidBalanceForAssetResultDecoder,
       'getbalance',
+      null,
       '*',
       minConf,
       includeWatchOnly,
@@ -352,6 +362,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.GetLiquidBalanceResultDecoder,
       'getbalance',
+      null,
       '*',
       minConf,
       includeWatchOnly
@@ -361,12 +372,13 @@ export default class BitcoinJsonRpc {
   public async omniGetWalletAddressBalances() {
     return this.cmdWithRetryAndDecode(
       decoders.OmniGetWalletAddressBalancesResultDecoder,
-      'omni_getwalletaddressbalances'
+      'omni_getwalletaddressbalances',
+      null
     );
   }
 
   public async ancientGetInfo() {
-    return this.cmdWithRetryAndDecode(decoders.AncientGetInfoResultDecoder, 'getinfo');
+    return this.cmdWithRetryAndDecode(decoders.AncientGetInfoResultDecoder, 'getinfo', null);
   }
 
   // Arguments:
@@ -388,6 +400,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.OmniFundedSendResultDecoder,
       'omni_funded_send',
+      null,
       fromAddress,
       toAddress,
       propertyId,
@@ -400,6 +413,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.OmniFundedSendAllResultDecoder,
       'omni_funded_sendall',
+      null,
       fromAddress,
       toAddress,
       ecosystem,
@@ -408,19 +422,19 @@ export default class BitcoinJsonRpc {
   }
 
   public async omniGetTransaction(txid: string) {
-    return this.cmdWithRetryAndDecode(decoders.OmniGetTransactionResultDecoder, 'omni_gettransaction', txid);
+    return this.cmdWithRetryAndDecode(decoders.OmniGetTransactionResultDecoder, 'omni_gettransaction', null, txid);
   }
 
   public async omniListPendingTransactions() {
-    return this.cmdWithRetryAndDecode(decoders.OmniListPendingTransactionsDecoder, 'omni_listpendingtransactions');
+    return this.cmdWithRetryAndDecode(decoders.OmniListPendingTransactionsDecoder, 'omni_listpendingtransactions', null);
   }
 
   public async zcashGetOperationResult(operationIds: string[]) {
-    return this.cmdWithRetryAndDecode(decoders.ZcashGetOperationResultDecoder, 'z_getoperationresult', operationIds);
+    return this.cmdWithRetryAndDecode(decoders.ZcashGetOperationResultDecoder, 'z_getoperationresult', null, operationIds);
   }
 
   public async zcashGetBalanceForAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.ZcashGetBalanceForAddressDecoder, 'z_getbalance', address);
+    return this.cmdWithRetryAndDecode(decoders.ZcashGetBalanceForAddressDecoder, 'z_getbalance', null, address);
   }
 
   public async zcashSendMany(
@@ -445,11 +459,11 @@ export default class BitcoinJsonRpc {
       throw new Error('Cannot specify fee without specifying minConf');
     }
 
-    return this.cmdWithRetryAndDecode(decoders.ZcashSendManyDecoder, 'z_sendmany', ...args);
+    return this.cmdWithRetryAndDecode(decoders.ZcashSendManyDecoder, 'z_sendmany', null, ...args);
   }
 
   public async zcashValidateAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.ZcashValidateAddressDecoder, 'z_validateaddress', address);
+    return this.cmdWithRetryAndDecode(decoders.ZcashValidateAddressDecoder, 'z_validateaddress', null, address);
   }
 
   // Arguments:
@@ -463,6 +477,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.OmniSendDecoder,
       'omni_send',
+      null,
       fromAddress,
       toAddress,
       propertyId,
@@ -473,23 +488,23 @@ export default class BitcoinJsonRpc {
   public async zcashGetNewAddress(type?: string) {
     const args: any[] = type === undefined ? [] : [type];
 
-    return this.cmdWithRetryAndDecode(decoders.ZcashGetNewAddressDecoder, 'z_getnewaddress', ...args);
+    return this.cmdWithRetryAndDecode(decoders.ZcashGetNewAddressDecoder, 'z_getnewaddress', null, ...args);
   }
 
   public async zcashListUnspent(minConf?: number) {
     const args: any[] = minConf === undefined ? [] : [minConf];
 
-    return this.cmdWithRetryAndDecode(decoders.ZcashListUnspentDecoder, 'z_listunspent', ...args);
+    return this.cmdWithRetryAndDecode(decoders.ZcashListUnspentDecoder, 'z_listunspent', null, ...args);
   }
 
   public async listUnspent(minConf?: number) {
     const args: any[] = minConf === undefined ? [] : [minConf];
 
-    return this.cmdWithRetryAndDecode(decoders.ListUnspentDecoder, 'listunspent', ...args);
+    return this.cmdWithRetryAndDecode(decoders.ListUnspentDecoder, 'listunspent', null, ...args);
   }
 
   public async dumpPrivateKey(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.DumpPrivateKeyDecoder, 'dumpprivkey', address);
+    return this.cmdWithRetryAndDecode(decoders.DumpPrivateKeyDecoder, 'dumpprivkey', null, address);
   }
 
   public async isReady() {
