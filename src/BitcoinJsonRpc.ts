@@ -6,6 +6,13 @@ import { PURE_METHODS, getWasExecutedFromError, getShouldRetry, iotsDecode } fro
 import { BitcoinJsonRpcError } from './BitcoinJsonRpcError';
 import * as decoders from './decoders';
 import * as t from 'io-ts';
+import urlJoin from 'url-join';
+
+type SendToAddressArgs = { walletName?: string, address: string; amount: string; comment?: string; commentTo?: string; subtractFeeFromAmount?: boolean, replaceable?: boolean };
+type SignRawTransactionWithWalletArgs = { walletName?: string, hex: string };
+type LockUnspentArgs = { walletName?: string; unlock: boolean, transactions: { txid: string; vout: number }[] };
+type GetTransactionArgs = { walletName?: string; txhash: string };
+type ListUnspentArgs =  { walletName?: string; minConf?: number };
 
 const MAX_ATTEMPTS = 5;
 const DELAY_BETWEEN_ATTEMPTS = 5000;
@@ -18,11 +25,16 @@ export default class BitcoinJsonRpc {
     this.options = options;
   }
 
-  private cmd(method: string, ...params: any[]): Promise<any> {
-    return jsonRpcCmd(this.url, method, params);
+  private cmdWithPath(method: string, path: string, ...params: any[]) {
+    return jsonRpcCmd(urlJoin(this.url, path), method, params);
   }
 
-  private cmdWithRetry(method: string, ...params: any[]): Promise<any> {
+  private cmd(method: string, path: string | null, ...params: any[]): Promise<any> {
+    const url = path === null ? this.url : urlJoin(this.url, path);
+    return jsonRpcCmd(url, method, params);
+  }
+
+  private cmdWithRetry(method: string, path: string | null, ...params: any[]): Promise<any> {
     const methodIsPure = PURE_METHODS.includes(method);
     const maxAttempts = MAX_ATTEMPTS;
 
@@ -38,7 +50,7 @@ export default class BitcoinJsonRpc {
       });
 
       try {
-        const result = await this.cmd(method, ...params);
+        const result = await this.cmd(method, path, ...params);
         return result;
       } catch (error) {
         const executed = getWasExecutedFromError(method, error);
@@ -85,9 +97,10 @@ export default class BitcoinJsonRpc {
   private async cmdWithRetryAndDecode<A, I = unknown>(
     decoder: t.Decoder<I, A>,
     method: string,
+    path: string | null,
     ...params: any[]
   ): Promise<A> {
-    const result = await this.cmdWithRetry(method, ...params);
+    const result = await this.cmdWithRetry(method, path, ...params);
 
     try {
       const decoded = iotsDecode(decoder, result);
@@ -103,36 +116,64 @@ export default class BitcoinJsonRpc {
   }
 
   // https://bitcoin-rpc.github.io/en/doc/0.17.99/rpc/wallet/sendtoaddress/
-  public async sendToAddress(address: string, amount: string, comment?: string, commentTo?: string, subtractFeeFromAmount?: boolean, replaceable?: boolean) {
-    const params: any[] = [address, amount];
+  public async sendToAddress(address: string, amount: string, comment?: string, commentTo?: string, subtractFeeFromAmount?: boolean, replaceable?: boolean): Promise<decoders.SendToAddressResult>;
+  public async sendToAddress(args: SendToAddressArgs): Promise<decoders.SendToAddressResult>;
+  public async sendToAddress(addressOrArgs: string | SendToAddressArgs, amount?: string, comment?: string, commentTo?: string, subtractFeeFromAmount?: boolean, replaceable?: boolean) {
+    const args: SendToAddressArgs = typeof addressOrArgs === 'string' ? {
+      address: addressOrArgs,
+      amount: String(amount),
+      comment,
+      commentTo,
+      subtractFeeFromAmount,
+      replaceable,
+    } : addressOrArgs;
 
-    if (replaceable !== undefined) {
-      // Argument #6
-      params.push(comment ?? '', commentTo ?? '', subtractFeeFromAmount ?? false, replaceable);
-    } else if (subtractFeeFromAmount !== undefined) {
-      // Argument #5
-      params.push(comment ?? '', commentTo ?? '', subtractFeeFromAmount);
-    } else if (commentTo !== undefined) {
-      // Argument #4
-      params.push(comment ?? '', commentTo);
-    } else if (commentTo) {
-      // Argument #3 
-      params.push(comment);
-    }
+    const params: any[] = [args.address, args.amount];
+    params.push(args.comment ?? '');
+    params.push(args.commentTo ?? '');
+    params.push(args.subtractFeeFromAmount ?? '');
+    params.push(args.replaceable ?? '');
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
 
-    return this.cmdWithRetryAndDecode(decoders.SendToAddressResultDecoder, 'sendtoaddress', ...params);
+    return this.cmdWithRetryAndDecode(decoders.SendToAddressResultDecoder, 'sendtoaddress', path, ...params);
   }
 
-  public async signRawTransactionWithWallet(hex: string) {
+  public async signRawTransactionWithWallet(hex: string): Promise<decoders.SignRawTransactionWithWalletResult>;
+  public async signRawTransactionWithWallet(args: SignRawTransactionWithWalletArgs): Promise<decoders.SignRawTransactionWithWalletResult>;
+  public async signRawTransactionWithWallet(hexOrArgs: string | SignRawTransactionWithWalletArgs) {
+    const args: SignRawTransactionWithWalletArgs = typeof hexOrArgs === 'string' ? {
+      hex: hexOrArgs,
+    } : hexOrArgs;
+
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
     return this.cmdWithRetryAndDecode(
       decoders.SignRawTransactionWithWalletResultDecoder,
       'signrawtransactionwithwallet',
-      hex
+      path,
+      args.hex
     );
   }
 
-  public async lockUnspent(unlock: boolean, transactions: { txid: string; vout: number }[]) {
-    return this.cmdWithRetryAndDecode(decoders.LockUnspentResultDecoder, 'lockunspent', unlock, transactions);
+  public async lockUnspent(unlock: boolean, transactions: { txid: string; vout: number }[]): Promise<decoders.LockUnspentResult>;
+  public async lockUnspent(args: LockUnspentArgs): Promise<decoders.LockUnspentResult>;
+  public async lockUnspent(unlockOrArgs: boolean | LockUnspentArgs, transactions?: { txid: string; vout: number }[]) {
+    let args: LockUnspentArgs;
+    if (typeof unlockOrArgs === 'boolean') {
+      if (!transactions) {
+        throw new Error('Must specify transactions');
+      }
+      args = {
+        unlock: unlockOrArgs,
+        transactions,
+      };
+    } else {
+      args = unlockOrArgs;
+    }
+
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
+    return this.cmdWithRetryAndDecode(decoders.LockUnspentResultDecoder, 'lockunspent', path, args.unlock, args.transactions);
   }
 
   // Arguments:
@@ -167,6 +208,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.CreateRawTransactionResultDecoder,
       'createrawtransaction',
+      null,
       inputs,
       outputs,
       lockTime
@@ -215,6 +257,7 @@ export default class BitcoinJsonRpc {
   public async fundRawTransaction(
     hex: string,
     options: {
+      walletName?: string,
       changeAddress?: string,
       changePosition?: number,
       change_type?: string,
@@ -229,8 +272,10 @@ export default class BitcoinJsonRpc {
     iswitness?: boolean
   ) {
     //@todo impl with iswitness option
+    const path = options.walletName ? `/wallet/${options.walletName}` : null;
+
     return this.cmdWithRetryAndDecode(
-      decoders.FundRawTransactionResultDecoder, 'fundrawtransaction', hex, options
+      decoders.FundRawTransactionResultDecoder, 'fundrawtransaction', path, hex, options
     );
   }
 
@@ -277,56 +322,66 @@ export default class BitcoinJsonRpc {
     );
   }
 
-  public async getTransaction(txhash: string) {
-    return this.cmdWithRetryAndDecode(decoders.GetTransactionResultDecoder, 'gettransaction', txhash);
+  public async getTransaction(txhash: string): Promise<decoders.GetTransactionResult>;
+  public async getTransaction(args: GetTransactionArgs): Promise<decoders.GetTransactionResult>;
+  public async getTransaction(txhashOrArgs: string | GetTransactionArgs) {
+    const args = typeof txhashOrArgs === 'string' ? {
+      txhash: txhashOrArgs,
+    } : txhashOrArgs;
+
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
+    return this.cmdWithRetryAndDecode(decoders.GetTransactionResultDecoder, 'gettransaction', path, args.txhash);
   }
 
   public async liquidGetTransaction(txhash: string) {
-    return this.cmdWithRetryAndDecode(decoders.LiquidGetTransactionResultDecoder, 'gettransaction', txhash);
+    return this.cmdWithRetryAndDecode(decoders.LiquidGetTransactionResultDecoder, 'gettransaction', null, txhash);
   }
 
   public async getInfo() {
-    return this.cmdWithRetryAndDecode(decoders.GetInfoResultDecoder, 'getinfo');
+    return this.cmdWithRetryAndDecode(decoders.GetInfoResultDecoder, 'getinfo', null);
   }
 
   public async getBlockchainInfo() {
-    return this.cmdWithRetryAndDecode(decoders.GetBlockchainInfoResultDecoder, 'getblockchaininfo');
+    return this.cmdWithRetryAndDecode(decoders.GetBlockchainInfoResultDecoder, 'getblockchaininfo', null);
   }
 
   public async getRawTransactionAsObject(txhash: string) {
-    return this.cmdWithRetryAndDecode(decoders.GetRawTransactionAsObjectResultDecoder, 'getrawtransaction', txhash, 1);
+    return this.cmdWithRetryAndDecode(decoders.GetRawTransactionAsObjectResultDecoder, 'getrawtransaction', null, txhash, 1);
   }
 
   public async getBlockHashFromHeight(height: number) {
-    return this.cmdWithRetryAndDecode(decoders.GetBlockHashFromHeightResultDecoder, 'getblockhash', height);
+    return this.cmdWithRetryAndDecode(decoders.GetBlockHashFromHeightResultDecoder, 'getblockhash', null, height);
   }
 
   public async getBlockFromHash(blockHash: string) {
-    return this.cmdWithRetryAndDecode(decoders.GetBlockFromHashResultDecoder, 'getblock', blockHash);
+    return this.cmdWithRetryAndDecode(decoders.GetBlockFromHashResultDecoder, 'getblock', null, blockHash);
   }
 
   public async getRawMempool() {
-    return this.cmdWithRetryAndDecode(decoders.GetRawMempoolResultDecoder, 'getrawmempool');
+    return this.cmdWithRetryAndDecode(decoders.GetRawMempoolResultDecoder, 'getrawmempool', null);
   }
 
   public async validateAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.ValidateAddressResultDecoder, 'validateaddress', address);
+    return this.cmdWithRetryAndDecode(decoders.ValidateAddressResultDecoder, 'validateaddress', null, address);
   }
 
   public async liquidValidateAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.LiquidValidateAddressResultDecoder, 'validateaddress', address);
+    return this.cmdWithRetryAndDecode(decoders.LiquidValidateAddressResultDecoder, 'validateaddress', null, address);
   }
 
-  public async getNewAddress() {
-    return this.cmdWithRetryAndDecode(decoders.GetNewAddressResultDecoder, 'getnewaddress');
+  public async getNewAddress(args: { walletName?: string }) {
+    const path = args && args.walletName ? `/wallet/${args.walletName}` : null;
+    return this.cmdWithRetryAndDecode(decoders.GetNewAddressResultDecoder, 'getnewaddress', path);
   }
 
-  public async getBalance() {
-    return this.cmdWithRetryAndDecode(decoders.GetBalanceResultDecoder, 'getbalance');
+  public async getBalance(args: { walletName?: string }) {
+    const path = args && args.walletName ? `/wallet/${args.walletName}` : null;
+    return this.cmdWithRetryAndDecode(decoders.GetBalanceResultDecoder, 'getbalance', path);
   }
 
   public async generateToAddress(nblocks: number, address:string) {
-    return this.cmdWithRetryAndDecode(decoders.GenerateToAddressResultDecoder, 'generatetoaddress', nblocks, address);
+    return this.cmdWithRetryAndDecode(decoders.GenerateToAddressResultDecoder, 'generatetoaddress', null, nblocks, address);
   }
 
   public async getLiquidBalanceForAsset(
@@ -337,6 +392,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.GetLiquidBalanceForAssetResultDecoder,
       'getbalance',
+      null,
       '*',
       minConf,
       includeWatchOnly,
@@ -352,6 +408,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.GetLiquidBalanceResultDecoder,
       'getbalance',
+      null,
       '*',
       minConf,
       includeWatchOnly
@@ -361,12 +418,13 @@ export default class BitcoinJsonRpc {
   public async omniGetWalletAddressBalances() {
     return this.cmdWithRetryAndDecode(
       decoders.OmniGetWalletAddressBalancesResultDecoder,
-      'omni_getwalletaddressbalances'
+      'omni_getwalletaddressbalances',
+      null
     );
   }
 
   public async ancientGetInfo() {
-    return this.cmdWithRetryAndDecode(decoders.AncientGetInfoResultDecoder, 'getinfo');
+    return this.cmdWithRetryAndDecode(decoders.AncientGetInfoResultDecoder, 'getinfo', null);
   }
 
   // Arguments:
@@ -388,6 +446,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.OmniFundedSendResultDecoder,
       'omni_funded_send',
+      null,
       fromAddress,
       toAddress,
       propertyId,
@@ -400,6 +459,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.OmniFundedSendAllResultDecoder,
       'omni_funded_sendall',
+      null,
       fromAddress,
       toAddress,
       ecosystem,
@@ -408,19 +468,19 @@ export default class BitcoinJsonRpc {
   }
 
   public async omniGetTransaction(txid: string) {
-    return this.cmdWithRetryAndDecode(decoders.OmniGetTransactionResultDecoder, 'omni_gettransaction', txid);
+    return this.cmdWithRetryAndDecode(decoders.OmniGetTransactionResultDecoder, 'omni_gettransaction', null, txid);
   }
 
   public async omniListPendingTransactions() {
-    return this.cmdWithRetryAndDecode(decoders.OmniListPendingTransactionsDecoder, 'omni_listpendingtransactions');
+    return this.cmdWithRetryAndDecode(decoders.OmniListPendingTransactionsDecoder, 'omni_listpendingtransactions', null);
   }
 
   public async zcashGetOperationResult(operationIds: string[]) {
-    return this.cmdWithRetryAndDecode(decoders.ZcashGetOperationResultDecoder, 'z_getoperationresult', operationIds);
+    return this.cmdWithRetryAndDecode(decoders.ZcashGetOperationResultDecoder, 'z_getoperationresult', null, operationIds);
   }
 
   public async zcashGetBalanceForAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.ZcashGetBalanceForAddressDecoder, 'z_getbalance', address);
+    return this.cmdWithRetryAndDecode(decoders.ZcashGetBalanceForAddressDecoder, 'z_getbalance', null, address);
   }
 
   public async zcashSendMany(
@@ -445,11 +505,11 @@ export default class BitcoinJsonRpc {
       throw new Error('Cannot specify fee without specifying minConf');
     }
 
-    return this.cmdWithRetryAndDecode(decoders.ZcashSendManyDecoder, 'z_sendmany', ...args);
+    return this.cmdWithRetryAndDecode(decoders.ZcashSendManyDecoder, 'z_sendmany', null, ...args);
   }
 
   public async zcashValidateAddress(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.ZcashValidateAddressDecoder, 'z_validateaddress', address);
+    return this.cmdWithRetryAndDecode(decoders.ZcashValidateAddressDecoder, 'z_validateaddress', null, address);
   }
 
   // Arguments:
@@ -463,6 +523,7 @@ export default class BitcoinJsonRpc {
     return this.cmdWithRetryAndDecode(
       decoders.OmniSendDecoder,
       'omni_send',
+      null,
       fromAddress,
       toAddress,
       propertyId,
@@ -473,23 +534,30 @@ export default class BitcoinJsonRpc {
   public async zcashGetNewAddress(type?: string) {
     const args: any[] = type === undefined ? [] : [type];
 
-    return this.cmdWithRetryAndDecode(decoders.ZcashGetNewAddressDecoder, 'z_getnewaddress', ...args);
+    return this.cmdWithRetryAndDecode(decoders.ZcashGetNewAddressDecoder, 'z_getnewaddress', null, ...args);
   }
 
   public async zcashListUnspent(minConf?: number) {
     const args: any[] = minConf === undefined ? [] : [minConf];
 
-    return this.cmdWithRetryAndDecode(decoders.ZcashListUnspentDecoder, 'z_listunspent', ...args);
+    return this.cmdWithRetryAndDecode(decoders.ZcashListUnspentDecoder, 'z_listunspent', null, ...args);
   }
 
-  public async listUnspent(minConf?: number) {
-    const args: any[] = minConf === undefined ? [] : [minConf];
+  public async listUnspent(minConf?: number): Promise<decoders.ListUnspentResult>;
+  public async listUnspent(args: ListUnspentArgs): Promise<decoders.ListUnspentResult>;
+  public async listUnspent(minConfOrArgs?: number | ListUnspentArgs) {
+    const args = typeof minConfOrArgs === 'undefined' || typeof minConfOrArgs === 'number' ? {
+      minConf: minConfOrArgs,
+    } : minConfOrArgs;
 
-    return this.cmdWithRetryAndDecode(decoders.ListUnspentDecoder, 'listunspent', ...args);
+    const params: any[] = args.minConf === undefined ? [] : [args.minConf];
+    const path = args.walletName ? `/wallet/${args.walletName}` : null;
+
+    return this.cmdWithRetryAndDecode(decoders.ListUnspentDecoder, 'listunspent', path, ...params);
   }
 
   public async dumpPrivateKey(address: string) {
-    return this.cmdWithRetryAndDecode(decoders.DumpPrivateKeyDecoder, 'dumpprivkey', address);
+    return this.cmdWithRetryAndDecode(decoders.DumpPrivateKeyDecoder, 'dumpprivkey', null, address);
   }
 
   public async isReady() {
@@ -504,5 +572,16 @@ export default class BitcoinJsonRpc {
     } catch (error) {
       return false;
     }
+  }
+
+  // https://bitcoin-rpc.github.io/en/doc/0.17.99/rpc/wallet/createwallet/
+  public async createWallet(walletName: string, disablePrivateKeys: boolean = false) {
+    const args: any[] = [walletName];
+
+    if (disablePrivateKeys !== undefined) {
+      args.push(disablePrivateKeys);
+    }
+
+    return this.cmdWithRetryAndDecode(decoders.CreateWalletDecoder, 'createwallet', null, ...args);
   }
 }

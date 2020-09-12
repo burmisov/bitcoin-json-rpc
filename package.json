@@ -18,6 +18,7 @@
     "@types/jest": "25.2.1",
     "@types/lodash": "4.14.149",
     "@types/node": "12.12.35",
+    "@types/url-join": "^4.0.0",
     "jest": "25.3.0",
     "ts-jest": "25.4.0",
     "typescript": "3.8.3"
@@ -28,6 +29,7 @@
     "delay": "4.3.0",
     "fp-ts": "2.5.3",
     "io-ts": "2.2.0",
-    "lodash": "4.17.15"
+    "lodash": "4.17.15",
+    "url-join": "^4.0.1"
   }
 }
